@@ -1,0 +1,664 @@
+================================================================================
+PROJECT: Student Management System
+CURSORRULES VERSION: 1.0
+AUTHORITY: This file is the binding instruction set for all AI-assisted code
+generation in this repository. Every rule below is derived from and traceable
+to ARCH.md, API-CONTRACTS.md, DATA-MODEL.md, or BACKLOG.md.
+Any code suggestion that violates a rule in this file must be rejected and
+regenerated. If a rule conflicts with a framework default, this file wins.
+================================================================================
+
+
+================================================================================
+SECTION 1 — CANONICAL FOLDER STRUCTURE
+================================================================================
+
+The directory tree below is the only permitted layout. Do not create files
+outside these paths without explicit instruction.
+
+backend/
+  app/
+    api/
+      v1/
+        __init__.py
+        students.py          # Router: student endpoints only
+        courses.py           # Router: course endpoints only
+        enrollments.py       # Router: enrollment endpoints only
+    core/
+      __init__.py
+      config.py              # Settings via pydantic-settings; no hardcoded env vars
+      security.py            # JWT decode, role extraction
+      middleware.py          # Auth middleware, request ID injection
+      exceptions.py          # ALL custom domain exceptions defined here and only here
+      envelope.py            # ResponseEnvelope builder; used by every route handler
+      logging.py             # Logging config; PII filter defined here
+    models/
+      __init__.py
+      student.py             # SQLAlchemy ORM model: Student
+      course.py              # SQLAlchemy ORM model: Course
+      enrollment.py          # SQLAlchemy ORM model: Enrollment
+    schemas/
+      __init__.py
+      student.py             # Pydantic schemas: StudentCreateSchema, StudentResponseSchema, StudentUpdateSchema
+      course.py              # Pydantic schemas: CourseCreateSchema, CourseResponseSchema, CourseUpdateSchema
+      enrollment.py          # Pydantic schemas: EnrollmentCreateSchema, EnrollmentResponseSchema
+      pagination.py          # PaginationMetaSchema, PaginatedResponseSchema
+    services/
+      __init__.py
+      student_service.py     # StudentService class
+      course_service.py      # CourseService class
+      enrollment_service.py  # EnrollmentService class
+    repositories/
+      __init__.py
+      base.py                # BaseRepository with shared filter defaults
+      student_repository.py  # StudentRepository class
+      course_repository.py   # CourseRepository class
+      enrollment_repository.py # EnrollmentRepository class
+    db/
+      __init__.py
+      session.py             # Async SQLAlchemy session factory
+      base.py                # DeclarativeBase
+  alembic/
+    versions/
+    env.py
+    alembic.ini
+  tests/
+    unit/
+      services/
+        test_student_service.py
+        test_course_service.py
+        test_enrollment_service.py
+    integration/
+  main.py                    # FastAPI app instantiation, middleware registration, router inclusion
+  requirements.txt
+
+frontend/
+  src/
+    api/
+      client.js              # Axios instance: base URL, JWT header injection, envelope parsing
+      students.js            # Student API call functions
+      courses.js             # Course API call functions
+      enrollments.js         # Enrollment API call functions
+    components/
+      StudentCard.jsx
+      CourseCard.jsx
+      EnrollForm.jsx
+      ErrorBanner.jsx
+      StatusBadge.jsx        # Renders "Deactivated" banner when is_active = false
+      PaginationControls.jsx
+    pages/
+      StudentList.jsx
+      StudentDetail.jsx
+      CourseList.jsx
+      CourseDetail.jsx
+      EnrollView.jsx
+    hooks/
+      useStudents.js
+      useCourses.js
+      useEnrollments.js
+    utils/
+      envelopeParser.js      # Reads success/data/error from all API responses
+      errorMessages.js       # Maps SCREAMING_SNAKE_CASE codes to display strings
+    App.jsx
+    index.jsx
+  public/
+  package.json
+
+
+================================================================================
+SECTION 2 — NAMING CONVENTIONS
+================================================================================
+
+PYTHON FILES
+All Python files must use snake_case.
+Correct:   student_service.py, enrollment_repository.py, course_schema.py
+Incorrect: StudentService.py, enrollmentRepository.py
+
+PYTHON CLASSES
+All Python classes must use PascalCase.
+Correct:   class StudentService, class CourseRepository, class EnrollmentCreateSchema
+Incorrect: class student_service, class courseRepository
+
+PYDANTIC SCHEMAS
+Every Pydantic model class must be suffixed with "Schema".
+Correct:   StudentCreateSchema, StudentResponseSchema, StudentUpdateSchema
+           CourseCreateSchema, CourseResponseSchema, CourseUpdateSchema
+           EnrollmentCreateSchema, EnrollmentResponseSchema
+           PaginationMetaSchema, PaginatedResponseSchema
+Incorrect: StudentCreate, StudentResponse, CreateStudent
+
+SQLALCHEMY MODELS
+SQLAlchemy ORM model classes must NOT use any suffix.
+Correct:   Student, Course, Enrollment
+Incorrect: StudentModel, CourseORM, EnrollmentTable
+
+REACT FILES AND COMPONENTS
+React component files must use PascalCase.
+Correct:   StudentCard.jsx, EnrollForm.jsx, ErrorBanner.jsx
+Incorrect: studentCard.jsx, enroll_form.jsx
+
+Non-component JS files must use camelCase.
+Correct:   client.js, envelopeParser.js, errorMessages.js
+Incorrect: Client.js, envelope_parser.js
+
+VARIABLES AND FUNCTIONS
+Python: snake_case for all variables and function names.
+JavaScript: camelCase for all variables and function names.
+
+DATABASE COLUMNS AND JSON FIELDS
+All database column names and all JSON field names must be snake_case.
+They must exactly match the column names in DATA-MODEL.md.
+Permitted fields for students:   id, first_name, last_name, email, enrollment_date, is_active, created_at, updated_at
+Permitted fields for courses:    id, name, description, is_active, created_at, updated_at
+Permitted fields for enrollments: id, student_id, course_id, enrolled_at, created_at
+
+URL PATHS
+All API route paths must use kebab-case for multi-word segments.
+All routes must be prefixed with /api/v1/.
+Correct:   /api/v1/students, /api/v1/students/{student_id}/courses
+Incorrect: /api/v1/Students, /students, /api/v1/student_courses
+
+
+================================================================================
+SECTION 3 — RESPONSE ENVELOPE ENFORCEMENT
+================================================================================
+
+RULE: Every route handler in every router file must return responses exclusively
+through the envelope builder in core/envelope.py. No route handler may return a
+raw Pydantic model, a raw dict, or a JSONResponse constructed inline.
+
+SUCCESS ENVELOPE SHAPE (all fields required):
+{
+  "success": true,
+  "data": <object or array>,
+  "message": "<human-readable string>",
+  "meta": <object, list endpoints only, omit on single-resource and write responses>
+}
+
+META SHAPE (list endpoints only):
+{
+  "page": <integer, 1-indexed>,
+  "page_size": <integer>,
+  "total": <integer, total matching records across all pages>
+}
+
+ERROR ENVELOPE SHAPE (all fields required):
+{
+  "success": false,
+  "error": {
+    "code": "<SCREAMING_SNAKE_CASE>",
+    "message": "<human-readable string, safe to display in UI>",
+    "field": "<field name string for 422 errors, null for all other errors>"
+  }
+}
+
+RULE: "meta" must be omitted entirely from single-resource and write responses
+(POST create, PUT update, DELETE deactivate/unenroll). It must be present on
+all GET list responses.
+
+RULE: "field" in the error envelope must be null for 401, 403, 404, and 409
+responses. It must identify the offending field name for 422 responses.
+
+RULE: The envelope builder must be called inside a single global exception
+handler registered in main.py. Individual routers must not contain try/except
+blocks that construct error responses directly.
+
+RULE: HTTP status codes in use in this project:
+201 — resource created successfully
+200 — read, update, or deactivation succeeded
+401 — missing or invalid JWT
+403 — valid JWT, insufficient role
+404 — UUID not found
+409 — business rule conflict (duplicate, blocked deactivation)
+422 — validation failure or inactive entity rule violation
+
+
+================================================================================
+SECTION 4 — LAYER RESPONSIBILITY AND STRICT LOGIC SEPARATION
+================================================================================
+
+ROUTER LAYER RULES
+A router function is permitted to do exactly three things:
+  1. Validate the request shape via a Pydantic schema (Pydantic returns 422 automatically).
+  2. Enforce the role permission check (call the role dependency; return 403 on failure).
+  3. Call the corresponding service method and pass the result to the envelope builder.
+
+RULE: A router function must never contain an if-statement that represents a
+business rule. The only conditionals permitted in a router are those required
+by the role dependency check.
+
+RULE: A router function must never import or reference SQLAlchemy, a repository
+class, or a database session object.
+
+RULE: A router function must never construct an error response directly. All
+errors are raised as domain exceptions in the service layer and caught by the
+global exception handler.
+
+RULE: A router function must never call another router function.
+
+SERVICE LAYER RULES
+The service layer owns all business logic. Every acceptance criterion from
+BACKLOG.md that describes a business rule is implemented in a service method.
+
+RULE: A service method must never import SQLAlchemy, construct a query, or
+reference a database session object directly. All data access is delegated
+to a repository method.
+
+RULE: A service method must raise a typed domain exception from
+core/exceptions.py when a business rule is violated. It must never return
+an error shape or set an HTTP status code directly.
+
+RULE: Service classes must accept their repository dependencies via constructor
+injection. Hardcoding a repository instantiation inside a service method is
+prohibited. This enables unit testing with mock repositories.
+
+RULE: Service method signatures must be async. No synchronous service methods.
+
+BUSINESS RULES THAT MUST LIVE IN THE SERVICE LAYER (not routers, not repos):
+- Duplicate email check on student create and student update (FR-02)
+- Future enrollment date rejection (FR-04)
+- Active student check before enrollment (FR-16, AC-11-4)
+- Active course check before enrollment (FR-17, AC-11-6)
+- Duplicate enrollment check (FR-18, AC-11-7)
+- Active enrollment guard before course deactivation (FR-14, AC-10-4)
+
+REPOSITORY LAYER RULES
+The repository layer is the only layer permitted to import SQLAlchemy or
+issue database queries.
+
+RULE: A repository method must return a plain domain model object or a list
+of plain domain model objects. It must never return a raw SQLAlchemy ORM
+instance to the service layer. Map ORM objects to domain models before return.
+
+RULE: A repository method that lists records must apply is_active = TRUE
+filtering by default. The base repository class in repositories/base.py must
+enforce this default so individual methods cannot accidentally omit it.
+
+RULE: A repository method that lists records must apply the default sort:
+  - students and courses: created_at DESC
+  - enrollments: enrolled_at DESC
+This sort must be applied in the repository, not in the service or router.
+
+RULE: Repository methods must be async. No synchronous repository methods.
+
+RULE: Repository method names must express intent, not SQL mechanics.
+Correct:   get_by_email, deactivate, list_paginated, get_by_student_id
+Incorrect: select_where_email, update_is_active, run_query
+
+RULE: The repository layer must catch SQLAlchemy unique constraint violations
+and re-raise them as the appropriate typed domain exception from
+core/exceptions.py before they propagate to the service layer.
+
+FRONTEND API CLIENT RULES
+The Axios instance in src/api/client.js is the only location where the
+base URL and JWT Bearer token are configured.
+
+RULE: No component or page file may construct a fetch or axios call directly.
+All API calls must go through the functions in src/api/.
+
+RULE: The frontend must never contain business logic. All validation decisions
+are delegated to the backend. Client-side field validation for UX purposes is
+permitted only if it mirrors a backend constraint exactly.
+
+RULE: The frontend reads all API responses through envelopeParser.js. No
+component may directly access response.data.data or response.data.error
+without going through the shared parser.
+
+
+================================================================================
+SECTION 5 — EXCEPTIONS AND ERROR GOVERNANCE
+================================================================================
+
+ALL PERMITTED EXCEPTION CLASSES (must be defined in core/exceptions.py only):
+
+DomainException          — base class; all custom exceptions inherit from this
+ResourceNotFoundException  — maps to 404 RESOURCE_NOT_FOUND
+DuplicateEmailException    — maps to 409 EMAIL_ALREADY_EXISTS
+EnrollmentConflictException — maps to 409 ENROLLMENT_ALREADY_EXISTS
+CourseHasActiveEnrollmentsException — maps to 409 COURSE_HAS_ACTIVE_ENROLLMENTS
+ValidationException        — maps to 422 VALIDATION_ERROR; carries field: str attribute
+StudentInactiveException   — maps to 422 STUDENT_INACTIVE; carries field: "student_id"
+CourseInactiveException    — maps to 422 COURSE_INACTIVE; carries field: "course_id"
+UnauthorizedException      — maps to 401 UNAUTHORIZED
+ForbiddenException         — maps to 403 FORBIDDEN
+
+RULE: Raising a plain Python Exception, ValueError, KeyError, or any built-in
+exception to signal a domain error is prohibited. All domain errors must be
+raised using one of the typed exception classes above.
+
+RULE: All domain exception classes must carry a "code" attribute set to the
+exact SCREAMING_SNAKE_CASE value from the API-CONTRACTS.md error registry.
+The global exception handler reads this attribute to populate error.code
+in the response envelope.
+
+PERMITTED ERROR CODES (exact strings, no variation permitted):
+UNAUTHORIZED
+FORBIDDEN
+RESOURCE_NOT_FOUND
+EMAIL_ALREADY_EXISTS
+ENROLLMENT_ALREADY_EXISTS
+COURSE_HAS_ACTIVE_ENROLLMENTS
+VALIDATION_ERROR
+STUDENT_INACTIVE
+COURSE_INACTIVE
+
+RULE: The global exception handler in main.py is the single location that maps
+domain exceptions to HTTP status codes and constructs error envelopes. No other
+file may perform this mapping.
+
+RULE: Pydantic validation failures (422) are handled by the existing FastAPI
+exception handler override. The override must format the response to match
+the standard error envelope shape with code: "VALIDATION_ERROR" and
+field: <first failing field name>.
+
+FRONTEND ERROR HANDLING RULES
+RULE: The frontend must map every SCREAMING_SNAKE_CASE error code to a
+human-readable display string in src/utils/errorMessages.js.
+RULE: No component may display a raw error code string or a raw Python
+traceback to the user under any circumstance.
+RULE: If error.code is STUDENT_INACTIVE or COURSE_INACTIVE, the frontend
+must surface a message that identifies the deactivated entity by name, not
+by UUID.
+
+
+================================================================================
+SECTION 6 — TYPE AND VALIDATION STANDARDS
+================================================================================
+
+EMAIL FIELDS
+RULE: Every Pydantic schema field that represents an email address must use
+the EmailStr type from pydantic[email]. Using plain str for an email field
+is prohibited.
+Correct:   email: EmailStr
+Incorrect: email: str
+
+UUID FIELDS
+RULE: Every Pydantic schema field that represents a UUID (id, student_id,
+course_id) must use the UUID type from Python's uuid module, not str.
+Correct:   id: UUID, student_id: UUID
+Incorrect: id: str, student_id: str
+
+RULE: Every path parameter that accepts a UUID must be typed as UUID in the
+FastAPI route signature. FastAPI will automatically return 422 VALIDATION_ERROR
+with the offending field name if a non-RFC-4122 value is supplied.
+Correct:   async def get_student(student_id: UUID, ...)
+Incorrect: async def get_student(student_id: str, ...)
+
+DATE FIELDS
+RULE: enrollment_date must use Python's datetime.date type in all Pydantic
+schemas. It must be serialized to YYYY-MM-DD in all JSON responses.
+
+TIMESTAMP FIELDS
+RULE: created_at and updated_at must use datetime with timezone=True in all
+Pydantic schemas. They must be serialized to ISO 8601 UTC format
+(YYYY-MM-DDTHH:MM:SS.sssZ) in all JSON responses.
+
+BOOLEAN FIELDS
+RULE: is_active must use Python's bool type. It must serialize to JSON
+true / false (lowercase). Do not serialize as 0/1 or "true"/"false".
+
+PAGINATION FIELDS
+RULE: page and page_size query parameters must have the following defaults
+and constraints enforced at the router level via Pydantic Query annotations:
+  page:      default=1, ge=1
+  page_size: default=20, ge=1, le=100
+
+SQLALCHEMY COLUMN TYPES
+RULE: id columns must use sqlalchemy.dialects.postgresql.UUID with
+as_uuid=True and server_default=text("gen_random_uuid()").
+RULE: created_at and updated_at must use DateTime(timezone=True) with
+server_default=func.now(). updated_at must also carry onupdate=func.now().
+RULE: is_active must use Boolean with nullable=False and default=True.
+RULE: email must carry a UniqueConstraint at the table level, not only
+a column-level unique=True.
+RULE: The enrollments table must carry a UniqueConstraint on
+(student_id, course_id) defined at the table level in __table_args__.
+
+
+================================================================================
+SECTION 7 — ASYNC AND CONCURRENCY STANDARDS
+================================================================================
+
+RULE: All route handler functions must be declared with async def.
+Synchronous route handlers are prohibited.
+
+RULE: All service methods must be declared with async def.
+
+RULE: All repository methods must be declared with async def.
+
+RULE: The SQLAlchemy session must be created via an async session factory
+using AsyncSession from sqlalchemy.ext.asyncio. The synchronous Session
+must not be used anywhere in the codebase.
+
+RULE: Database sessions must be injected into repository methods via
+FastAPI's Depends() mechanism. Sessions must never be instantiated directly
+inside a service or repository method body.
+
+RULE: await must be used on every async database call. Unawaited coroutines
+are a silent failure mode and are treated as a blocking bug.
+
+RULE: The UNIQUE(student_id, course_id) constraint on the enrollments table
+is the final race-condition guard for concurrent duplicate enrollment attempts.
+The service-layer duplicate check is the first guard. Both guards must be
+present. The repository must catch the DB unique violation and raise
+EnrollmentConflictException so the 409 response is returned to both
+concurrent callers.
+
+
+================================================================================
+SECTION 8 — AUTHENTICATION AND MIDDLEWARE
+================================================================================
+
+RULE: JWT validation must occur in middleware (core/middleware.py) before
+any request reaches a router. No router function may perform JWT validation.
+
+RULE: The middleware must extract the role claim from the validated JWT and
+attach it to the request state as request.state.role.
+
+RULE: The middleware must generate a unique request ID (UUID v4) for every
+incoming request and attach it to the request state as request.state.request_id.
+This ID must appear in all log lines for that request.
+
+RULE: If the JWT is missing, malformed, or expired, the middleware must return
+a 401 response using the standard error envelope before the request proceeds
+to any router or service. No business logic may execute on an unauthenticated
+request.
+
+RULE: Role enforcement is a two-layer system.
+  Layer 1: Middleware validates the token is present and well-formed.
+  Layer 2: A FastAPI role dependency on each protected route checks
+           request.state.role against the permitted roles for that endpoint.
+The permitted role sets are:
+  admin only:        POST /students, PUT /students/{id}, DELETE /students/{id}
+                     POST /courses,  PUT /courses/{id},  DELETE /courses/{id}
+                     DELETE /students/{id}/courses/{course_id}
+  admin and staff:   GET /students, GET /students/{id}
+                     GET /courses,  GET /courses/{id}
+                     POST /students/{id}/courses
+                     GET  /students/{id}/courses
+
+RULE: The role dependency function must be defined once in core/security.py
+and reused via Depends() on every protected route. It must not be duplicated
+or reimplemented per-router.
+
+RULE: Sensitive data — JWT token strings, Authorization header values,
+passwords, and any credential material — must never appear in log output
+at any log level.
+
+
+================================================================================
+SECTION 9 — LOGGING STANDARDS
+================================================================================
+
+RULE: All logging must use Python's standard logging module configured in
+core/logging.py. print() statements are prohibited in production code paths.
+
+RULE: Every incoming HTTP request must be logged at INFO level. The log
+line must include: timestamp, request_id, HTTP method, path, and response
+status code. It must NOT include: Authorization header, JWT token, request
+body content, email addresses, or any other PII.
+
+RULE: Every unhandled exception and every domain exception that results in
+a 4xx or 5xx response must be logged at ERROR level with a full stack trace.
+The log line must include: request_id, error code, and exception type.
+It must NOT include field values that may contain PII.
+
+RULE: Log levels in use:
+  DEBUG   — local development only; must be disabled in staging and production
+  INFO    — request lifecycle events, service method entry/exit in development
+  WARNING — recoverable issues, deprecated usage
+  ERROR   — all exceptions that generate a 4xx or 5xx response
+
+RULE: The PII filter defined in core/logging.py must scrub the following
+patterns from all log output at all levels: email addresses, JWT tokens,
+Authorization header values, and any field matching the name "password".
+
+
+================================================================================
+SECTION 10 — FILE SIZE LIMITS
+================================================================================
+
+RULE: No Python file may exceed 200 lines. This limit applies to all files
+in app/ including routers, services, repositories, models, and schemas.
+
+RULE: No React component file (.jsx) may exceed 200 lines.
+
+RULE: No JavaScript utility or API client file may exceed 200 lines.
+
+RULE: If a file approaches the 200-line limit, the correct action is to
+extract a logically cohesive unit into a new file, not to compress existing
+code. Extraction must follow the naming and folder structure rules in
+Section 1 and Section 2.
+
+RULE: The 200-line limit excludes blank lines and comment-only lines.
+Inline docstrings count toward the limit.
+
+
+================================================================================
+SECTION 11 — TESTING STANDARDS
+================================================================================
+
+RULE: Every public method on every service class must have at least one
+corresponding pytest unit test in tests/unit/services/.
+
+RULE: Unit tests for service methods must use mock repositories injected
+via the service constructor. No unit test may connect to a real database,
+spin up a FastAPI app instance, or make a real HTTP request.
+
+RULE: The following scenarios must each have a dedicated test function.
+These are derived from BACKLOG.md acceptance criteria:
+
+For StudentService:
+  test_create_student_success
+  test_create_student_raises_on_duplicate_email           (AC-01-3)
+  test_create_student_raises_on_future_enrollment_date    (AC-01-5)
+  test_update_student_raises_on_duplicate_email_conflict  (AC-04-2)
+  test_deactivate_student_preserves_enrollment_records    (AC-05-4)
+
+For CourseService:
+  test_create_course_success
+  test_deactivate_course_raises_when_enrollments_exist    (AC-10-4)
+
+For EnrollmentService:
+  test_assign_course_success
+  test_assign_course_raises_when_student_inactive         (AC-11-4)
+  test_assign_course_raises_when_course_inactive          (AC-11-6)
+  test_assign_course_raises_on_duplicate_enrollment       (AC-11-7)
+  test_list_enrollments_returns_empty_list_not_404        (AC-12-2)
+  test_remove_enrollment_success
+
+RULE: Each test function must assert both the return value on the happy path
+and the exact exception type raised on the error path. Asserting only that
+"some exception" is raised is insufficient.
+
+RULE: Test file names must mirror the service file they test.
+Correct:   tests/unit/services/test_student_service.py
+Incorrect: tests/unit/test_student.py, tests/test_services.py
+
+RULE: pytest is the only permitted test runner. unittest.TestCase classes
+are not permitted in new test files.
+
+RULE: Fixtures for mock repositories must be defined in a conftest.py file
+at tests/unit/services/. They must not be duplicated across test files.
+
+
+================================================================================
+SECTION 12 — SOFT DELETE ENFORCEMENT
+================================================================================
+
+RULE: No DELETE SQL statement may be issued against the students or courses
+tables under any user-triggered code path. Deactivation sets is_active = FALSE.
+The only permitted hard delete is against the enrollments table (unenrollment).
+
+RULE: Every repository method that queries students or courses for list or
+lookup operations must include a WHERE is_active = TRUE filter by default.
+The base repository class must enforce this as a class-level default that
+cannot be accidentally omitted.
+
+RULE: The GET /students/{student_id} and GET /courses/{course_id} endpoints
+must return 200 OK with the full record even if is_active = false. They must
+return 404 only if the UUID does not exist at all. This is the inactive
+resource behaviour defined in API-CONTRACTS.md sections 2.3 and 3.3.
+
+RULE: The repository get_by_id method for students and courses must NOT apply
+the is_active filter. It returns any record matching the UUID regardless of
+active status. The list_paginated method applies the is_active filter.
+
+RULE: CourseService must verify that zero rows exist in enrollments with
+course_id matching the target course before setting is_active = FALSE on
+that course. If any enrollment rows exist, CourseHasActiveEnrollmentsException
+must be raised before any update is issued.
+
+
+================================================================================
+SECTION 13 — WHAT IS EXPLICITLY PROHIBITED
+================================================================================
+
+The following patterns are prohibited throughout the entire codebase.
+Any code suggestion containing these patterns must be rejected.
+
+PROHIBITED IN ROUTERS:
+- Direct SQLAlchemy imports or session usage
+- Repository class instantiation or method calls
+- if-statements implementing business rules
+- try/except blocks constructing error response dicts
+- Returning raw Pydantic model instances without the envelope builder
+- Returning JSONResponse(...) inline without going through envelope.py
+
+PROHIBITED IN SERVICES:
+- SQLAlchemy imports of any kind
+- Direct database session references
+- Hardcoded repository instantiation (use constructor injection)
+- Returning HTTP status codes, dicts shaped like error envelopes, or
+  JSONResponse objects
+- Synchronous method definitions (all methods must be async def)
+
+PROHIBITED IN REPOSITORIES:
+- Business logic of any kind
+- Raising domain exceptions other than to re-raise a caught DB constraint
+  violation as the appropriate typed domain exception
+- Returning raw ORM-bound objects to the service layer
+- Omitting the is_active = TRUE filter on list queries for students or courses
+- Synchronous method definitions (all methods must be async def)
+
+PROHIBITED GLOBALLY:
+- Hardcoded secrets, database URLs, or JWT signing keys anywhere in app/ code
+  (all must come from core/config.py via environment variables)
+- print() statements in any file under app/ or src/
+- Raw Python Exception, ValueError, or KeyError raised to signal a domain error
+- Any HTTP endpoint exposed outside the /api/v1/ prefix
+- Any response that does not conform to the standard success or error envelope
+- Permanent deletion of student or course records under any user-triggered path
+- Logging PII: email addresses, JWT tokens, Authorization headers, passwords
+- camelCase JSON field names in any API request or response body
+- Client-supplied id, student_id, course_id values used as primary keys
+  (all PKs are server-generated UUIDs)
+- Synchronous SQLAlchemy Session (use AsyncSession only)
+- localStorage or sessionStorage usage in the frontend for auth tokens
+  (tokens must be managed in memory or httpOnly cookies only)
+
+
+================================================================================
+END OF CURSORRULES
+Generated from: ARCH.md, API-CONTRACTS.md, DATA-MODEL.md, BACKLOG.md
+================================================================================
